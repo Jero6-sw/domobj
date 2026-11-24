@@ -1,3 +1,14 @@
+///
+/// \file CmdServo.cpp
+/// \brief Servo control.
+/// \author 
+/// \version 1.0
+/// \date 10 october 2024
+///
+/// Servo control for ESP32/ESP8266 targets.
+///
+///
+
 #include "CmdServo.h"
 
 CmdServo::CmdServo(int id, int servoPin, int minValue, int maxValue, int maxDegree, boolean reversed, boolean debug) {
@@ -53,6 +64,8 @@ void CmdServo::setStop() {
   // Cancel current move
   debugPrint("Stop moving!");
   target = currentPosition;
+  
+  detach();
 
   statusChangedCallback(id);
 }
@@ -100,7 +113,7 @@ void CmdServo::loop() {
 
   // Notify that we have reached the target
   if (currentPosition == target && previousPosition != currentPosition) {
-    detach();
+    //detach();
     statusChangedCallback(id);
     positionChangedCallback(id);
   }

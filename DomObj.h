@@ -1,8 +1,19 @@
+///
+/// \file DomObj.h
+/// \brief Domotic Object in MQTT protocol.
+/// \author Jero6
+/// \version 0.6
+/// \date 18 october 2025
+///
+/// MQTT object for ESP32/ESP8266 targets, with generic peripherals.
+///
+///
 
 //#define __VMC1LR__
-#define __ARROSLR__
+//#define __ARROSLR__
+#define __LITGOD__
 
-#define SW_VERSION "0.1"
+#define SW_VERSION "0.7"
 
 enum e_actuator { tSERVO, tDIGOUT, tDIGTEMP};
 enum e_sensor { tDIGIN, tANIN, tTIC};
@@ -19,21 +30,24 @@ const struct s_actuator {
   e_actuator Type;
   int Pin;
   boolean reversed;
-  } actuator[] = {{"servo1", tSERVO, D7, false},
-			            {"servo2", tSERVO, D6, false},
-			            {"servo3", tSERVO, D5, false},
-			            {"servo4", tSERVO, D4, false},
-			            {"servo5", tSERVO, D3, false},
-			            {"servo6", tSERVO, D2, false},
-			            {"servo7", tSERVO, D1, false},
-			            {"poweron", tDIGOUT, D8, false}};
+  } actuator[] = {{"servo1", tSERVO, 4, false},
+			         {"servo2", tSERVO, 0, false},
+			         {"servo3", tSERVO, 2, false},
+			         {"servo4", tSERVO, 15, false},
+			         {"servo5", tSERVO, 12, false},
+                  {"servo6", tSERVO, 14, false},
+                  {"poweron12", tDIGOUT, 5, true},
+			         {"poweron34", tDIGOUT, 13, true},
+			         {"poweron56", tDIGOUT, 16, true}};
 
 
-const struct s_sensor {
+struct s_sensor {
   char Name[13];
   e_sensor Type;
+  long MeanVal;
+  byte NbVal;
   int Pin;
-} sensor[1] = {{"powerstatus", tDIGIN, D9}};
+} sensor[] = {{"powerrb", tANIN, 0, 0, 6}}; // pin A0/6/TOUT for ESP8266
 
 #endif // __VMC1LR__
 
@@ -51,17 +65,46 @@ const struct s_actuator {
   boolean reversed;
   } actuator[] = {{"pump1", tDIGTEMP, 5, false},
 			         {"pump2", tDIGTEMP, 18, false},
-			         {"LED", tDIGOUT, 1, false}};
+			         {"LED", tDIGOUT, 19, false}
+               };
 
 
-const struct s_sensor {
+struct s_sensor {
   char name[13];
   e_sensor Type;
+  long MeanVal;
+  byte NbVal;
   int Pin;
-} sensor[1] = {{"soil", tANIN, 36}};
+} sensor[] = {{"soil", tANIN, 0, 0, 36}};
 
 #endif // __ARROSLR__
 
+////////////////////////////////////////////////////////////////////////
+// Compilation for Litiere Auto Godet - ESP8266
+#ifdef __LITGOD__
+
+#define CLTYPE "domobj"
+#define CLID "LitGod"
+
+const struct s_actuator {
+  char Name[13];
+  e_actuator Type;
+  int Pin;
+  boolean reversed;
+  } actuator[] = {{"poweron12", tDIGOUT, 5, true},
+			         {"poweron34", tDIGOUT, 13, true},
+			         {"poweron56", tDIGOUT, 16, true}};
+
+
+struct s_sensor {
+  char Name[13];
+  e_sensor Type;
+  long MeanVal;
+  byte NbVal;
+  int Pin;
+} sensor[] = {{"powerrb", tANIN, 0, 0, 6}}; // pin A0/6/TOUT for ESP8266
+
+#endif // __VMC1LR__
 
 ////////////////////////////////////////////////////////////////////////
 // wifi settings
@@ -108,9 +151,10 @@ const int servo_max_angle = 270;
 
 ////////////////////////////////////////////////////////////////////////
 // Mqtt topics (for advanced use, no need to modify)
-const char* mqtt_state_topic        = CLTYPE "/" CLID "/%s/state";
-const char* mqtt_command_topic      = CLTYPE "/" CLID "/%s/set";
-const char* mqtt_position_topic     = CLTYPE "/" CLID "/%s/position";
-const char* mqtt_set_position_topic = CLTYPE "/" CLID "/%s/position/set";
+const char* mqtt_state_topic        = CLTYPE "/" CLID "/%d/state";
+const char* mqtt_sensor_topic       = CLTYPE "/" CLID "/%d/sensor";
+const char* mqtt_command_topic      = CLTYPE "/" CLID "/%d/set";
+const char* mqtt_position_topic     = CLTYPE "/" CLID "/%d/position";
+const char* mqtt_set_position_topic = CLTYPE "/" CLID "/%d/position/set";
 const char* mqtt_debug_topic        = CLTYPE "/" CLID "/%s/debug"; // debug topic
-const char* ha_config_topic           = "homeassistant/cover/" CLTYPE "/" CLID "/%s/config";
+const char* ha_config_topic           = "homeassistant/cover/" CLTYPE "/" CLID "/%d/config";

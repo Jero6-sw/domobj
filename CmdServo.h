@@ -1,3 +1,14 @@
+///
+/// \file CmdServo.h
+/// \brief Servo control.
+/// \author 
+/// \version 1.0
+/// \date 10 october 2024
+///
+/// Servo control for ESP32/ESP8266 targets.
+///
+///
+
 #ifndef CMDSERVO_H
 #define CMDSERVO_H
 

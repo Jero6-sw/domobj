@@ -13,6 +13,21 @@
 // Get genericity in the MQTT protocol : cmd discretes, get sensors (I2c moisture), get TIC
 // Use WifiManager to get rid of passwords
 
+// Jero6 02/08/2024
+// DEBUG JGA 2/8/24 temp manual pumpon
+
+///
+/// \file DomObj.ino
+/// \brief Domotic Object in MQTT protocol.
+/// \author Jero6
+/// \version 0.6
+/// \date 29 september 2025
+///
+/// MQTT object for ESP32/ESP8266 targets, with generic peripherals.
+///
+///
+ 
+ 
 #define MODEL "undef"
 
 
@@ -32,6 +47,8 @@
 #include <ArduinoJson.h>
 #include <ArduinoOTA.h>
 #include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
+#include "time.h"
+
 
 #include "DomObj.h"
 #include "CmdServo.h"
@@ -44,12 +61,21 @@
 
 // Callbacks
 void mqttCallback(char* topic, byte* payload, unsigned int payloadLength);
+void statusChanged(int servoId);
+void positionChanged(int servoId);
+
+// Substitution functions for ESP8266
+#if defined(ESP8266)
+bool getLocalTime(struct tm * info, uint32_t ms = 5000);
+#endif
 
 // Wifi
 WiFiClient wifiClient;
 
 // MQTT
 PubSubClient client(mqtt_server, mqtt_port, mqttCallback, wifiClient);
+void subscribeAndPublishConfig(int ActuatorId);
+void publishConfig(int ActuatorId);
 
 int numberOfActuators = 0;
 int numberOfSensors = 0;
@@ -60,10 +86,39 @@ CmdServo servos[sizeof(s_actuator)];
 bool debug = DEBUG;
 int numberOfServos = 0;
 int pos = 0;
+void debugPrint(String message);
 
 //String uniqueId;
 
 unsigned long loopStart;
+
+// DEBUG JGA 2/8/24
+//#include "time.h"
+byte Pump1ON = 0;
+byte Pump2ON = 0;
+// Assign output variables to GPIO pins
+const int output5 = 5;
+const int output18 = 18;
+// Hour Minute Second variables
+unsigned long currentTime = millis();
+unsigned long previousMillis = 0;        // will store last time Data was updated
+unsigned long interv_tick_second = 1000;           // interval at which to save datas (milliseconds)
+struct tm timeinfo;
+byte InitTime=0;
+byte LocalSecond=0;
+byte LocalMinute=0;
+byte LocalHour=0;
+int DeltaSecond;
+//struct tm timeinfo;
+// Update things on minute change
+byte PreviousLocalMinute=0;
+byte isMinuteChanged=0;
+byte LocalHourSensorPublished=255;
+byte LocalMinuteSaved=0;
+int TmpTimeON=30; // Temps PumpON en secondes
+String statusMsg;
+
+
 
 ////////////////////////////////////////////////////////////////////////
 // Setup
@@ -79,9 +134,12 @@ void setup() {
 
   wifiConnect();
 
+  delay(1000);
+
   // Setup OTA
   initOTA();
 
+  delay(1000);
 
 ///////////////
 
@@ -94,8 +152,6 @@ void setup() {
   Serial.print("numberOfActuators = ");
   Serial.println(numberOfActuators);
 
-  Serial.print("numberOfSensors = ");
-  Serial.println(numberOfSensors);
 
   numberOfServos=0;
   for (int i = 0; i < numberOfActuators; i++) {
@@ -111,18 +167,46 @@ void setup() {
 
 	if (actuator[i].Type == tDIGOUT) {
       pinMode(actuator[i].Pin, OUTPUT);    // sets the digital pin as output
-      digitalWrite(actuator[i].Pin, LOW);
+      if (actuator[i].reversed == false) {
+         digitalWrite(actuator[i].Pin, LOW);
+         }
+      else {
+         digitalWrite(actuator[i].Pin, HIGH);
+         }
       }
 
 	if (actuator[i].Type == tDIGTEMP) {
       pinMode(actuator[i].Pin, OUTPUT);    // sets the digital pin as output
-      digitalWrite(actuator[i].Pin, LOW);
+      if (actuator[i].reversed == false) {
+         digitalWrite(actuator[i].Pin, LOW);
+         }
+      else {
+         digitalWrite(actuator[i].Pin, HIGH);
+         }
       }
 
-    }
+  Serial.print(i);
+  Serial.print("-");
+
+    } // numberOfActuators
 
   Serial.print("numberOfServos = ");
   Serial.println(numberOfServos);
+
+
+  for (int i = 0; i < numberOfSensors; i++) {
+  	if (sensor[i].Type == tANIN) {
+      //pinMode(sensor[i].Pin, INPUT);    // sets the digital pin as input
+      }
+	  if (sensor[i].Type == tDIGIN) {
+      pinMode(sensor[i].Pin, INPUT);    // sets the digital pin as input
+      }
+  Serial.print(i);
+  Serial.print("-");
+  }
+
+  Serial.print("numberOfSensors = ");
+  Serial.println(numberOfSensors);
 
 ////////////////
 
@@ -167,7 +251,7 @@ void wifiConnect() {
 
     if(!res) {
         Serial.println("Failed to connect");
-        delay(5000);
+        delay(10000);
         ESP.restart();
     } 
 //    else {
@@ -189,7 +273,8 @@ void wifiConnect() {
   Serial.println();
   Serial.print("Connected! IP address: ");
   Serial.println(WiFi.localIP());
-}
+  InitTime=1; // Ask for Internet time
+  }
 
 void mqttConnect() {
   if (!!!client.connected()) {
@@ -202,13 +287,19 @@ void mqttConnect() {
   for (int i = 0; i < numberOfActuators; i++) {
     subscribeAndPublishConfig(i);
     }
+  debugPrint("DomObj mqtt connected, v" SW_VERSION);
+
+  //delay(5000);
+
   }
 }
 
 void initOTA() {
+  Serial.print("InitOTA..");
   ArduinoOTA.setHostname(client_id);
   ArduinoOTA.setPassword(ota_password);
   ArduinoOTA.begin();
+  Serial.println("Done!");
 }
 
 
@@ -220,7 +311,19 @@ void loop()
   // check that we are connected
   if (!client.loop()) {
     mqttConnect();
-  }
+
+      Serial.println("mqttConnect OK");
+
+    if ( (InitTime==1) && (getLocalTime(&timeinfo)) ) { //If internet : update the Time
+      delay(500);
+      LocalSecond = timeinfo.tm_sec;
+      LocalMinute = timeinfo.tm_min;
+      LocalHour = timeinfo.tm_hour;
+      InitTime=0;
+
+      Serial.println("Update time OK");
+      }
+    }
 
   unsigned long now = millis();
 
@@ -232,17 +335,76 @@ void loop()
     // Main servo loop
     for (int i = 0; i < numberOfServos; i++) {
       servos[i].loop();
-    }
+      }
 ////////////////
+    }
 
-  }
 
   // Rest of the loop
 #if defined(ESP8266)
   MDNS.update();
 #endif
   ArduinoOTA.handle();
-}
+
+   currentTime = millis();
+
+   // Update local time
+   if (currentTime - previousMillis >= interv_tick_second) {
+      DeltaSecond = (currentTime - previousMillis) / interv_tick_second;
+      // save the last time the second has been updated
+      previousMillis = currentTime;
+
+      LocalSecond = LocalSecond + DeltaSecond;
+      if (LocalSecond>59) {
+         LocalSecond=LocalSecond-60;
+         LocalMinute++;
+         if (LocalMinute==60) {
+            LocalMinute=0;
+            LocalHour++;
+            if (LocalHour==24)
+               LocalHour=0;
+            }
+         }
+      } // end interv_tick_second
+
+   // Update things on minute change
+   if (LocalMinute!=PreviousLocalMinute) {
+      PreviousLocalMinute=LocalMinute;
+      isMinuteChanged=1;
+      }
+   else {
+      isMinuteChanged=0;
+      }
+
+   // Publication MQTT des capteurs analogiques toutes les heures
+   if ((LocalMinute==02)&&(isMinuteChanged==1)&&(LocalHourSensorPublished!=LocalHour)) {
+//      Serial.print(&timeinfo, "%H:%M:%S : ");
+
+     for (int i = 0; i < numberOfSensors; i++) {
+       publishSensor(i);
+       }
+
+      LocalHourSensorPublished=LocalHour;
+      } // end every hour
+
+
+  // Acquisition toutes les minutes pour obtenir une valeur moyenne des capteurs analogiques
+  if ((LocalMinuteSaved!=LocalMinute)) {
+    LocalMinuteSaved=LocalMinute;
+    for (int i = 0; i < numberOfSensors; i++) {
+      if (sensor[i].Type == tANIN) {
+        if (sensor[i].NbVal==0) {
+          sensor[i].MeanVal=analogRead(sensor[i].Pin);
+          }
+        else {
+          sensor[i].MeanVal = sensor[i].MeanVal + analogRead(sensor[i].Pin);
+          }
+        sensor[i].NbVal++;
+        }
+      }
+    }
+
+  } // End loop
 
 
 
@@ -250,6 +412,28 @@ void loop()
 // Subfunctions
 ////////////////////////////////////////////////////////////////////////
 
+//////////////////////////////////////////////////////////////////////
+/// \fn getLocalTime
+/// \brief substitution function for ESP8266 target
+/// \param info is a time structure
+/// \param ms is the timeout in millisecond (default 5000)
+/// \return boolean for correct operation
+#if defined(ESP8266)
+bool getLocalTime(struct tm * info, uint32_t ms)
+{
+    uint32_t start = millis();
+    time_t now;
+    while((millis()-start) <= ms) {
+        time(&now);
+        localtime_r(&now, info);
+        if(info->tm_year > (2016 - 1900)){
+            return true;
+        }
+        delay(10);
+    }
+    return false;
+}
+#endif
 ////////////////////////////////////////////////////////////////////////
 // WifiManager - get custom parameter
 String getParam(WiFiManager wm, String name){
@@ -262,7 +446,10 @@ String getParam(WiFiManager wm, String name){
 }
 
 ////////////////////////////////////////////////////////////////////////
-// CmdServo - get a servo by its id
+/// \fn servoById
+/// \brief get a servo by its id
+/// \param id is the id of the servo
+/// \return pointer to the CmdServo struct
 CmdServo& servoById(int id) {
   for (int i = 0; i < numberOfServos; i++) {
     CmdServo& s = servos[i];
@@ -273,7 +460,10 @@ CmdServo& servoById(int id) {
 }
 
 ////////////////////////////////////////////////////////////////////////
-// CmdServo - get a servo by its pin number
+/// \fn servoByPin
+/// \brief get a servo by its pin number
+/// \param pin is the pin number of the CPU connected to the servo
+/// \return pointer to the CmdServo struct
 CmdServo& servoByPin(int pin) {
   for (int i = 0; i < numberOfServos; i++) {
     CmdServo& s = servos[i];
@@ -313,7 +503,7 @@ void subscribeAndPublishConfig(int ActuatorId) {
    else if ((actuator[ActuatorId].Type == tDIGOUT)||(actuator[ActuatorId].Type == tDIGTEMP)) {
       //actuator[ActuatorId].Pin;
       Serial.print("Publishing ha config for digital output ");
-      Serial.println(actuator[ActuatorId].name);
+      Serial.println(actuator[ActuatorId].Name);
       }
    else {
       // FAIL
@@ -324,7 +514,8 @@ void subscribeAndPublishConfig(int ActuatorId) {
 
    // Subscribe to the set actuator topic
    char topic[MQTT_TOPIC_MAX_LENGTH];
-   sprintf(topic, mqtt_command_topic, String(ActuatorId));
+   String stractuatorId = String(ActuatorId);
+   sprintf(topic, mqtt_command_topic, ActuatorId); //stractuatorId.c_str());
 
    if (client.subscribe(topic)) {
       // OK
@@ -337,18 +528,19 @@ void subscribeAndPublishConfig(int ActuatorId) {
    // Subscribe to the set position actuator topic -- only for servos actuators --
    if (actuator[ActuatorId].Type == tSERVO) {
       char set_position_t[MQTT_TOPIC_MAX_LENGTH];
-      sprintf(set_position_t, mqtt_set_position_topic, s.getId());
+      String strId = String(s.getId());
+      sprintf(set_position_t, mqtt_set_position_topic, ActuatorId); //strId.c_str());
       if (client.subscribe(set_position_t)) {
          // OK
-         debugPrint("Subscribed to blinds set position topic (" + String(s.getId()) + "), uniqueId = " CLID);
+         debugPrint("Subscribed to " CLTYPE " set position topic (" + String(s.getId()) + "), uniqueId = " CLID);
          publishConfig(ActuatorId); // Publish config right after subscribed to command topic
       } else {
          // FAIL
-         debugPrint("Failed to subscribe to blinds set topic (" + String(s.getId()) + ")");
+         debugPrint("Failed to subscribe to " CLTYPE " set topic (" + String(s.getId()) + ")");
       }
    }
 
-   //publishConfig(ActuatorId); // Publish config right after subscribed to command topic
+   publishConfig(ActuatorId); // Publish config right after subscribed to command topic
    }
 
 ////////////////////////////////////////////////////////////////////////
@@ -410,9 +602,19 @@ void handleSetServo(byte * payload, unsigned int length, int ActuatorId) {
 // subMQTT - Set a digital pin
 void handleSetDigout(byte * payload, unsigned int length, int ActuatorId) {
   if (!strncmp((char *)payload, "ON", length)) {
-    digitalWrite(actuator[ActuatorId].Pin, HIGH);
+      if (actuator[ActuatorId].reversed == false) {
+         digitalWrite(actuator[ActuatorId].Pin, HIGH);
+         }
+      else {
+         digitalWrite(actuator[ActuatorId].Pin, LOW);
+         }
   } else if (!strncmp((char *)payload, "OFF", length)) {
-    digitalWrite(actuator[ActuatorId].Pin, LOW);
+      if (actuator[ActuatorId].reversed == false) {
+         digitalWrite(actuator[ActuatorId].Pin, LOW);
+         }
+      else {
+         digitalWrite(actuator[ActuatorId].Pin, HIGH);
+         }
   }
 }
 
@@ -420,10 +622,22 @@ void handleSetDigout(byte * payload, unsigned int length, int ActuatorId) {
 // subMQTT - Set a digital pin with tempo
 void handleSetDigtemp(byte * payload, unsigned int length, int ActuatorId) {
   if (!strncmp((char *)payload, "ON", length)) {
-    digitalWrite(actuator[ActuatorId].Pin, HIGH);
+      if (actuator[ActuatorId].reversed == false) {
+         digitalWrite(actuator[ActuatorId].Pin, HIGH);
+         }
+      else {
+         digitalWrite(actuator[ActuatorId].Pin, LOW);
+         }
   } else if (!strncmp((char *)payload, "OFF", length)) { 
-    digitalWrite(actuator[ActuatorId].Pin, LOW);
+      if (actuator[ActuatorId].reversed == false) {
+         digitalWrite(actuator[ActuatorId].Pin, LOW);
+         }
+      else {
+         digitalWrite(actuator[ActuatorId].Pin, HIGH);
+         }
   }
+// DEBUG JGA 2/8/24
+debugPrint("SetDigTemp");
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -550,4 +764,39 @@ void statusChanged(int servoId) {
   char position_t[MQTT_TOPIC_MAX_LENGTH];
   sprintf(position_t, mqtt_position_topic, servoId);
   client.publish(position_t, String(s.currentAngleInPercent()).c_str(), retain_position);
+}
+
+
+
+////////////////////////////////////////////////////////////////////////
+// MQTT-publish sensor
+void publishSensor(int sensorId) {
+  int sensorValue;
+  char cstatusMsg[20];
+  String statusMsg;
+
+	if (sensor[sensorId].Type == tANIN) {
+    sensorValue = (sensor[sensorId].MeanVal)/(sensor[sensorId].NbVal);
+    sensor[sensorId].NbVal=0;
+    sprintf(cstatusMsg, "%d", sensorValue);
+    }
+
+  statusMsg=cstatusMsg;
+
+	if (sensor[sensorId].Type == tDIGIN) {
+    if (digitalRead(sensor[sensorId].Pin))
+      statusMsg = "open";
+    else
+      statusMsg = "closed";
+    }
+
+
+  // Publish status
+//  String statusMsg = "0";
+  Serial.println(statusMsg);
+  char t[MQTT_TOPIC_MAX_LENGTH];
+  String strsensorId = String(sensorId);
+  sprintf(t, mqtt_sensor_topic, sensorId); //strsensorId.c_str());
+  client.publish(t, statusMsg.c_str());
+
 }
