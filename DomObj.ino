@@ -14,19 +14,22 @@
 // Use WifiManager to get rid of passwords
 
 // Jero6 02/08/2024
-// DEBUG JGA 2/8/24 temp manual pumpon
+// DEBUG temp manual pumpon
+
+// Jero6 25/11/2021
+// Improve robustness in poor wifi connexions, OTA is OK
 
 ///
 /// \file DomObj.ino
 /// \brief Domotic Object in MQTT protocol.
 /// \author Jero6
-/// \version 0.6
-/// \date 29 september 2025
+/// \version 1.0
+/// \date 25 november 2026
 ///
 /// MQTT object for ESP32/ESP8266 targets, with generic peripherals.
 ///
 ///
- 
+
  
 #define MODEL "undef"
 
@@ -71,6 +74,10 @@ bool getLocalTime(struct tm * info, uint32_t ms = 5000);
 
 // Wifi
 WiFiClient wifiClient;
+unsigned long lastWifiCheck = 0;
+unsigned long wifiDownSince = 0;
+unsigned long lastMqttRetry = 0;
+const unsigned long MQTT_RECONNECT_INTERVAL = 10000;  // 10 s
 
 // MQTT
 PubSubClient client(mqtt_server, mqtt_port, mqttCallback, wifiClient);
@@ -141,13 +148,13 @@ void setup() {
 
   delay(1000);
 
-///////////////
+  ///////////////
 
   numberOfActuators = sizeof(actuator) / sizeof(actuator[0]);
   numberOfSensors = sizeof(sensor) / sizeof(sensor[0]);
 
-//  numberOfServos = sizeof(servoPins) / sizeof(servoPins[0]);
-//  int numberOfReversedServos = sizeof(reversedPins) / sizeof(servoPins[0]); // We might not have any servos as reversed, thus using servoPin size
+  //  numberOfServos = sizeof(servoPins) / sizeof(servoPins[0]);
+  //  int numberOfReversedServos = sizeof(reversedPins) / sizeof(servoPins[0]); // We might not have any servos as reversed, thus using servoPin size
 
   Serial.print("numberOfActuators = ");
   Serial.println(numberOfActuators);
@@ -208,25 +215,33 @@ void setup() {
   Serial.print("numberOfSensors = ");
   Serial.println(numberOfSensors);
 
-////////////////
+  ////////////////
 
   mqttConnect();
   client.setCallback(mqttCallback);
+  client.setKeepAlive(30);      // plus tolérant aux réseaux lents
+  client.setSocketTimeout(2);
 
-}
+  }
 
+////////////////////////////////////////////////////////////////////////
 void wifiConnect() {
   Serial.println("Connecting wifi..");
   WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
-  // it is a good practice to make sure your code sets wifi mode how you want it.
+  WiFi.persistent(true);        // identifiants bien conservés (NVM/flash)
+  WiFi.setAutoReconnect(true);  // reconnexion automatique de la couche WiFi
+
 
   //WiFiManager, Local intialization. Once its business is done, there is no need to keep it around
   WiFiManager wm;
 
-    // reset settings - wipe stored credentials for testing
-    // these are stored by the esp library
-    // wm.resetSettings();
-
+  // reset settings - wipe stored credentials for testing
+  // these are stored by the esp library
+  // wm.resetSettings();
+  wm.setConfigPortalTimeout(180);       // ne bloque jamais indéfiniment au boot
+  wm.setConnectRetries(5);              // plusieurs essais avant le portail AP
+  wm.setWiFiAutoReconnect(true);
+  
     // Automatically connect using saved credentials,
     // if connection fails, it starts an access point with the specified name ( "AutoConnectAP"),
     // if empty will auto generate SSID, if password is blank it will be anonymous AP (wm.autoConnect())
@@ -244,56 +259,56 @@ void wifiConnect() {
 
 
 
-    bool res;
-    // res = wm.autoConnect(); // auto generated AP name from chipid
-    // res = wm.autoConnect("AutoConnectAP"); // anonymous ap
-    res = wm.autoConnect("AutoConnectAP","passwordDom"); // password protected ap
+  bool res;
+  // res = wm.autoConnect(); // auto generated AP name from chipid
+  // res = wm.autoConnect("AutoConnectAP"); // anonymous ap
+  res = wm.autoConnect("AutoConnectAP","passwordDom"); // password protected ap
 
-    if(!res) {
-        Serial.println("Failed to connect");
-        delay(10000);
-        ESP.restart();
+  if(!res) {
+    Serial.println("Failed to connect, restarting");
+    ESP.restart();
     } 
-//    else {
-//        //if you get here you have connected to the WiFi    
-//        Serial.println("connected...yeey :)");
-//    }
-
-
-//  WiFi.begin(ssid, password);
-//  while (WiFi.status() != WL_CONNECTED) {
-//    // wait 500ms
-//    Serial.print(".");
-//    delay(500);
-//  }
-
-//  WiFi.mode(WIFI_STA);
 
   // Connected to WiFi
+  WiFi.setSleep(false);   // IMPORTANT : évite les déconnexions par économie d'énergie
+
   Serial.println();
   Serial.print("Connected! IP address: ");
   Serial.println(WiFi.localIP());
   InitTime=1; // Ask for Internet time
+
+  // Après une connexion réussie, récupérer les paramètres du portail
+  if (strlen(custom_mqtt_server.getValue())) {
+    strncpy(mqtt_server,   custom_mqtt_server.getValue(), 40);
+    strncpy(mqtt_username, custom_mqtt_username.getValue(), 40);
+    strncpy(mqtt_password, custom_mqtt_password.getValue(), 40);
+    mqtt_server[40] = '\0';
+    mqtt_username[40] = '\0';
+    mqtt_password[40] = '\0';
+    }
+
   }
 
+////////////////////////////////////////////////////////////////////////
 void mqttConnect() {
-  if (!!!client.connected()) {
-    Serial.println("Try to connect mqtt..");
-    int count = 20;
-    while (count-- > 0 && !!!client.connect(client_id, mqtt_username, mqtt_password)) {
-      delay(500);
+  Serial.println("Try to connect mqtt..");
+
+  if (!client.connect(client_id, mqtt_username, mqtt_password)) {
+    Serial.println("MQTT connect failed, will retry");
+    return;   // pas de boucle bloquante
+	}
+
+  if (client.connected()) {
+	// resubscribe + config uniquement si connecté
+    for (int i = 0; i < numberOfActuators; i++) {
+      subscribeAndPublishConfig(i);
+      }
+	Serial.println("MQTT connected & resubscribed");
+    debugPrint("DomObj mqtt connected, v" SW_VERSION);
     }
-
-  for (int i = 0; i < numberOfActuators; i++) {
-    subscribeAndPublishConfig(i);
-    }
-  debugPrint("DomObj mqtt connected, v" SW_VERSION);
-
-  //delay(5000);
-
   }
-}
 
+////////////////////////////////////////////////////////////////////////
 void initOTA() {
   Serial.print("InitOTA..");
   ArduinoOTA.setHostname(client_id);
@@ -306,14 +321,65 @@ void initOTA() {
 ////////////////////////////////////////////////////////////////////////
 // Main Loop
 ////////////////////////////////////////////////////////////////////////
-void loop()
-{
+void loop() {
+  unsigned long now = millis();
+
+  ArduinoOTA.handle();
+#if defined(ESP8266)
+  MDNS.update();
+#endif
+
+
+  // ---------- Gestion WiFi, toutes les 5 secondes ----------
+  if (now - lastWifiCheck >= 5000) {
+    lastWifiCheck = now;
+    if (WiFi.status() != WL_CONNECTED) {
+      if (wifiDownSince == 0) wifiDownSince = now;
+      // désactivé le disconnect, peut faire tomber OTA
+	  //Serial.println("WiFi down, trying to reconnect...");
+      //WiFi.disconnect();
+      //WiFi.reconnect();
+      // Si le WiFi est tombé depuis 10 minutes, on repart proprement
+      if (now - wifiDownSince >= 600000UL) {
+        Serial.println("WiFi down too long, restarting...");
+        wifiDownSince = 0;
+        ESP.restart();
+      }
+    } else {
+      wifiDownSince = 0;
+    }
+  }
+
+  ////////////////
+  // Main servo loop
+  if(now - loopStart >= turnTime) {
+    // Over one sec from start loop passed
+    loopStart = now;
+
+    for (int i = 0; i < numberOfServos; i++) {
+      servos[i].loop();
+      }
+    }
+  ////////////////
+
+
+  // -------- MQTT (seulement si le WiFi est OK), non bloquant --------
+  if (WiFi.status() == WL_CONNECTED) {
+    if (client.connected()) {
+      client.loop();
+    }
+    else if (now - lastMqttRetry >= MQTT_RECONNECT_INTERVAL) {
+      lastMqttRetry = now;
+      mqttConnect();   // reconnexion espacée, adoucie
+    }
+  }
+
+
+
+
+  // Rest of the loop
   // check that we are connected
-  if (!client.loop()) {
-    mqttConnect();
-
-      Serial.println("mqttConnect OK");
-
+  if (WiFi.status() == WL_CONNECTED) {
     if ( (InitTime==1) && (getLocalTime(&timeinfo)) ) { //If internet : update the Time
       delay(500);
       LocalSecond = timeinfo.tm_sec;
@@ -325,26 +391,6 @@ void loop()
       }
     }
 
-  unsigned long now = millis();
-
-  if(now - loopStart >= turnTime) {
-    // Over one sec from start loop passed
-    loopStart = now;
-
-////////////////
-    // Main servo loop
-    for (int i = 0; i < numberOfServos; i++) {
-      servos[i].loop();
-      }
-////////////////
-    }
-
-
-  // Rest of the loop
-#if defined(ESP8266)
-  MDNS.update();
-#endif
-  ArduinoOTA.handle();
 
    currentTime = millis();
 

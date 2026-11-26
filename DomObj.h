@@ -13,7 +13,7 @@
 //#define __ARROSLR__
 #define __LITGOD__
 
-#define SW_VERSION "0.7"
+#define SW_VERSION "1.0.a"
 
 enum e_actuator { tSERVO, tDIGOUT, tDIGTEMP};
 enum e_sensor { tDIGIN, tANIN, tTIC};
@@ -126,10 +126,10 @@ const unsigned int turnTime = 50; // how many milliseconds after one point of tu
 
 ////////////////////////////////////////////////////////////////////////
 // mqtt server settings
-char* mqtt_server   = "192.168.8.50"; // Your MQTT server address
-const int mqtt_port       = 1883; // Your MQTT server port
-char* mqtt_username = "guest"; // Your MQTT user
-char* mqtt_password = "guest"; // Your MQTT password
+char mqtt_server[41]   = "192.168.8.50";
+const int mqtt_port    = 1883;
+char mqtt_username[41] = "guest";
+char mqtt_password[41] = "guest";
 
 ////////////////////////////////////////////////////////////////////////
 // mqtt client settings

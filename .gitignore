@@ -1,1 +1,3 @@
-*.bak
+$ cat .gitignore
+# exclude backup files
+/*.bak
